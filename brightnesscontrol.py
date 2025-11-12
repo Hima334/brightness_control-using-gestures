@@ -1,183 +1,84 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[2]:
-
-
-pip install msvc-runtime
-
-
-# In[3]:
-
-
-pip install mediapipe --user
-
-
-# In[1]:
-
-
+import streamlit as st
 import cv2
 import mediapipe as mp
-from math import hypot
-import screen_brightness_control as sbc
 import numpy as np
+from math import hypot
 
+# optional: brightness control (works only locally)
+try:
+    import screen_brightness_control as sbc
+    BRIGHTNESS_AVAILABLE = True
+except ImportError:
+    BRIGHTNESS_AVAILABLE = False
 
-# In[2]:
+st.set_page_config(page_title="Gesture Brightness Control", layout="centered")
 
+st.title("🔆 Gesture-Based Brightness Control")
+st.write("Move your thumb and index finger apart or together to adjust brightness!")
 
-#initializing models
-mpHands=mp.solutions.hands
-hands=mpHands.Hands(static_image_mode=False,
+# Initialize Mediapipe Hands
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(
+    static_image_mode=False,
     model_complexity=1,
     min_detection_confidence=0.75,
     min_tracking_confidence=0.75,
-    max_num_hands=2)
-Draw=mp.solutions.drawing_utils
+    max_num_hands=1,
+)
+mp_draw = mp.solutions.drawing_utils
 
+# Capture image from user camera (Streamlit cloud-friendly)
+img_file = st.camera_input("📷 Take a photo (show your hand with thumb and index finger visible)")
 
-# In[ ]:
+if img_file is not None:
+    # Convert image to OpenCV format
+    file_bytes = np.asarray(bytearray(img_file.read()), dtype=np.uint8)
+    frame = cv2.imdecode(file_bytes, 1)
+    frame = cv2.flip(frame, 1)
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
+    # Process the image with Mediapipe
+    result = hands.process(frame_rgb)
+    landmark_list = []
 
-#start capturing video from webcam
-cap=cv2.VideoCapture(0)
-while True:
-    #read video frame by frame
-    _,frame=cap.read()
-    #flip image
-    frame=cv2.flip(frame,1)
-    #convert BGR image to RGB image
-    frameRGB=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-    #process the rgb image
-    Process=hands.process(frameRGB)
-    landmarkList=[]
-    #if hands are present in image(frame)
-    if Process.multi_hand_landmarks:
-        #detect handmarks
-        for handlm in Process.multi_hand_landmarks:
-            for _id,landmarks in enumerate(handlm.landmark):
-                #store height and width of image
-                height,width,color_channels=frame.shape
-                
-                #calculate and append x,y coordinates
-                #of handmarks from image(frame) to lmlist
-                x,y=int(landmarks.x*width),int(landmarks.y*height)
-                landmarkList.append([_id,x,y])
-            
-            #draw landmarks
-          
-            Draw.draw_landmarks(frame,handlm,mpHands.HAND_CONNECTIONS)
-    #if landmarks list is not empty
-    if landmarkList !=[]:
-        #store x,y coordinates of (tip of) thumb
-        x_1,y_1=landmarkList[4][1],landmarkList[4][2]
-        
-        #store x,y cooradinates of (tip of) inex finger
-        x_2,y_2=landmarkList[8][1],landmarkList[8][2]
-        
-        #draw circle on thumb and index finger tip
-        cv2.circle(frame,(x_1,y_1),7,(0,255,0),cv2.FILLED)
-        cv2.circle(frame,(x_2,y_2),7,(0,255,0),cv2.FILLED)
-        
-        #draw line from tip of thumb to tip of index finger
-        cv2.line(frame,(x_1,y_1),(x_2,y_2),(0,255,0),3)
-        
-        #calculate square root of the sum
-        #of squares of the specified arguments.
-        L=hypot(x_2-x_1,y_2-y_1)
-        
-        #1-d linear interpolant to a function
-        #with given discrete data points
-        #(Hans range 15-220,brightness range 0-100),
-        #evaluated at length.
-        b_level=np.interp(L,[15,220],[0,100])
-       
-        #set brightness
-        sbc.set_brightness(int(b_level))
-   
-    #display video and when 'q' is entered,#destroy the window
-    cv2.imshow('Image',frame)
-    if cv2.waitKey(1)& 0xff==ord('q'):
-        break
-cap.release()
-cv2.destroyAllWindows()
+    if result.multi_hand_landmarks:
+        for handlm in result.multi_hand_landmarks:
+            for _id, lm in enumerate(handlm.landmark):
+                h, w, _ = frame.shape
+                x, y = int(lm.x * w), int(lm.y * h)
+                landmark_list.append([_id, x, y])
+            mp_draw.draw_landmarks(frame, handlm, mp_hands.HAND_CONNECTIONS)
 
+    brightness = None
+    if landmark_list != []:
+        x1, y1 = landmark_list[4][1], landmark_list[4][2]   # Thumb tip
+        x2, y2 = landmark_list[8][1], landmark_list[8][2]   # Index tip
 
-# In[ ]:
+        # Draw visual indicators
+        cv2.circle(frame, (x1, y1), 8, (0, 255, 0), -1)
+        cv2.circle(frame, (x2, y2), 8, (0, 255, 0), -1)
+        cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
+        # Calculate distance between thumb & index finger
+        length = hypot(x2 - x1, y2 - y1)
 
-#Start capturing video from webcam
-cap = cv2.VideoCapture(0)
+        # Map range (15–220 px) → (0–100 brightness)
+        brightness = np.interp(length, [15, 220], [0, 100])
 
-while True:
-    #Read video frame by frame
-    _,frame = cap.read()
+        # Set brightness (if available)
+        if BRIGHTNESS_AVAILABLE:
+            sbc.set_brightness(int(brightness))
 
-    #Flip image
-    frame=cv2.flip(frame,1)
+    # Display the processed image
+    st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB")
 
-    #convert BGR image to RGB image
-    frameRGB = cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
+    if brightness is not None:
+        st.success(f"Estimated Brightness Level: **{int(brightness)}%**")
+    else:
+        st.warning("No hand detected. Try retaking the photo!")
 
-    #Process the RGB image
-    Process = hands.process(frameRGB)
+else:
+    st.info("👆 Click the camera above to capture your hand and adjust brightness!")
 
-    landmarkList = []
-    # if hands are present in image(frame)
-    if Process.multi_hand_landmarks:
-        # detect handmarks
-        for handlm in Process.multi_hand_landmarks:
-            for _id,landmarks in enumerate(handlm.landmark):
-                #store height and width of image
-                height,width,color_channels = frame.shape
-
-                #calculate and append x,y coordinatesQQQ
-                # of handmarks from image(frame) to lmList
-                x,y = int(landmarks.x*width),int(landmarks.y*height)
-                landmarkList.append([_id,x,y])
-                
-            #draw landmarks
-            Draw.draw_landmarks(frame,handlm,mpHands.HAND_CONNECTIONS)
-            
-    #If landmarks list is not empty
-    if landmarkList !=[]:
-        #store x,y coordinates of (tip of) thumb
-        x_1,y_1 = landmarkList[4][1],landmarkList[4][2]
-
-        #store x,y coordinates of (tip of) index finger
-        x_2,y_2 = landmarkList[8][1],landmarkList[8][2]
-
-        #draw circle on thumb and index finger tip
-        cv2.circle(frame,(x_1,y_1),7,(0,255,0),cv2.FILLED)
-        cv2.circle(frame,(x_2,y_2),7,(0,255,0),cv2.FILLED)
-
-        #Draw line from tip of thumb to tip of index finger
-        cv2.line(frame,(x_1,y_1),(x_2,y_2),(0,255,0),3)
-
-        #calculate square root of the sum
-        #of squares of the specified arguments
-        L=hypot(x_2-x_1,y_2-y_1)
-
-        # 1-D linear interpolant to a function
-        # with given discrete data points
-        # (Hand range 15-220, Brightness range 0-100),
-        # evaluated at length
-        b_level = np.interp(L,[15,220],[0,100])
-
-        # set brightness
-        sbc.set_brightness(int(b_level))
-        
-    #Display video and when 'q' is entered,
-    #destroy the window
-    cv2.imshow('Image',frame)
-    if cv2.waitKey(1) & 0xff == ord('q'):
-        break
-cap.release()
-cv2.destroyAllWindows()
-
-
-# In[ ]:
-
-
-
-
+st.markdown("---")
+st.caption("Developed by Suprith K — Powered by OpenCV & Mediapipe ✨")
