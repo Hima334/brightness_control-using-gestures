@@ -1,84 +1,74 @@
+# app.py  (cv2-free version)
 import streamlit as st
-import cv2
-import mediapipe as mp
+from PIL import Image
 import numpy as np
+import mediapipe as mp
 from math import hypot
 
 # optional: brightness control (works only locally)
 try:
     import screen_brightness_control as sbc
     BRIGHTNESS_AVAILABLE = True
-except ImportError:
+except Exception:
     BRIGHTNESS_AVAILABLE = False
 
 st.set_page_config(page_title="Gesture Brightness Control", layout="centered")
+st.title("🔆 Gesture-Based Brightness Control (no cv2 required)")
+st.write("Take a photo (show thumb & index finger).")
 
-st.title("🔆 Gesture-Based Brightness Control")
-st.write("Move your thumb and index finger apart or together to adjust brightness!")
-
-# Initialize Mediapipe Hands
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
     static_image_mode=False,
     model_complexity=1,
-    min_detection_confidence=0.75,
-    min_tracking_confidence=0.75,
+    min_detection_confidence=0.6,
+    min_tracking_confidence=0.6,
     max_num_hands=1,
 )
 mp_draw = mp.solutions.drawing_utils
 
-# Capture image from user camera (Streamlit cloud-friendly)
-img_file = st.camera_input("📷 Take a photo (show your hand with thumb and index finger visible)")
+img_file = st.camera_input("📷 Take a photo")
 
 if img_file is not None:
-    # Convert image to OpenCV format
-    file_bytes = np.asarray(bytearray(img_file.read()), dtype=np.uint8)
-    frame = cv2.imdecode(file_bytes, 1)
-    frame = cv2.flip(frame, 1)
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    # Read image bytes into PIL then to RGB numpy array
+    image = Image.open(img_file).convert("RGB")
+    frame = np.array(image)  # shape (H, W, 3), RGB
+    frame_rgb = frame.copy()
 
-    # Process the image with Mediapipe
-    result = hands.process(frame_rgb)
+    # Mediapipe expects RGB numpy array
+    results = hands.process(frame_rgb)
+
     landmark_list = []
-
-    if result.multi_hand_landmarks:
-        for handlm in result.multi_hand_landmarks:
+    if results.multi_hand_landmarks:
+        for handlm in results.multi_hand_landmarks:
+            # Collect landmark pixel coordinates
+            h, w, _ = frame.shape
             for _id, lm in enumerate(handlm.landmark):
-                h, w, _ = frame.shape
                 x, y = int(lm.x * w), int(lm.y * h)
                 landmark_list.append([_id, x, y])
+            # Draw landmarks (this modifies 'frame' visually using mediapipe's drawing utils)
             mp_draw.draw_landmarks(frame, handlm, mp_hands.HAND_CONNECTIONS)
 
     brightness = None
-    if landmark_list != []:
-        x1, y1 = landmark_list[4][1], landmark_list[4][2]   # Thumb tip
-        x2, y2 = landmark_list[8][1], landmark_list[8][2]   # Index tip
-
-        # Draw visual indicators
-        cv2.circle(frame, (x1, y1), 8, (0, 255, 0), -1)
-        cv2.circle(frame, (x2, y2), 8, (0, 255, 0), -1)
-        cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-        # Calculate distance between thumb & index finger
+    if landmark_list:
+        x1, y1 = landmark_list[4][1], landmark_list[4][2]   # thumb tip
+        x2, y2 = landmark_list[8][1], landmark_list[8][2]   # index tip
         length = hypot(x2 - x1, y2 - y1)
-
-        # Map range (15–220 px) → (0–100 brightness)
         brightness = np.interp(length, [15, 220], [0, 100])
 
-        # Set brightness (if available)
         if BRIGHTNESS_AVAILABLE:
-            sbc.set_brightness(int(brightness))
+            try:
+                sbc.set_brightness(int(brightness))
+            except Exception as e:
+                st.warning(f"Could not set system brightness: {e}")
 
-    # Display the processed image
-    st.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB")
+    # Show the result image (PIL expects RGB)
+    st.image(frame, channels="RGB", caption="Processed image (landmarks)")
 
     if brightness is not None:
         st.success(f"Estimated Brightness Level: **{int(brightness)}%**")
     else:
-        st.warning("No hand detected. Try retaking the photo!")
-
+        st.warning("No hand detected. Try again.")
 else:
-    st.info("👆 Click the camera above to capture your hand and adjust brightness!")
+    st.info("Click the camera above to take a photo.")
 
-st.markdown("---")
-st.caption("Developed by Suprith K — Powered by OpenCV & Mediapipe ✨")
+st.caption("No-cv2 version — uses Pillow + mediapipe.")
